@@ -5,9 +5,9 @@ services:
     runtime:
       version: '23.3.0'
     build:
-      command: corepack enable && corepack prepare yarn@4.5.1 --activate && yarn install
+      command: corepack enable && corepack prepare pnpm@9.12.1 --activate && pnpm install
     start:
-      command: corepack enable && yarn start
+      command: corepack enable && pnpm start
     envVars:
       - key: NODE_ENV
         value: production
@@ -18,4 +18,4 @@ services:
       interval: 10
       timeout: 5
       retries: 3
-    packageManager: yarn@4.5.1
+    packageManager: pnpm@9.12.1
