@@ -7,6 +7,7 @@ const userRoute = require("./controller/users.controller")
 const examRoutes = require('./controller/exam.controller');
 const quizRoutes = require('./controller/quiz.controller');
 const questionRoutes = require('./controller/question.controller');
+const courseRoutes = require('./controller/course.controller');
 
 const app = express();
 
@@ -28,6 +29,7 @@ app.use('/api/user/', userRoute);
 app.use('/api/exam/', examRoutes);
 app.use('/api/quiz/', quizRoutes);
 app.use('/api/question/', questionRoutes);
+app.use('/api/course/', courseRoutes);
 
 
 app.listen(5000, () => {
