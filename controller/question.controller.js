@@ -1,7 +1,35 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const Question = require('../model/Question');
+const Programme = require('../model/Programme');
+const Semester = require('../model/Semester');
+const Session = require('../model/Session');
+const Course = require('../model/Course');
 const { verifyToken, verifyTokenAndCoordinator } = require('./middleware');  // Assuming you have auth middlewar;
+
+const isObjectId = (value) =>
+  mongoose.Types.ObjectId.isValid(value) &&
+  String(new mongoose.Types.ObjectId(value)) === String(value);
+
+const resolveByIdOrName = async (Model, value) => {
+  if (!value) return null;
+  if (isObjectId(value)) return value;
+  const doc = await Model.findOne({ name: value });
+  if (!doc) throw new Error(`${Model.modelName} not found for "${value}"`);
+  return doc._id;
+};
+
+const resolveCourse = async (value, extraQuery) => {
+  if (!value) return null;
+  if (isObjectId(value)) return value;
+  const doc = await Course.findOne({
+    ...extraQuery,
+    $or: [{ code: value }, { name: value }]
+  });
+  if (!doc) throw new Error(`Course not found for "${value}"`);
+  return doc._id;
+};
 
 // POST route to save questions
 router.post('/questions', verifyTokenAndCoordinator, async (req, res) => {
@@ -12,8 +40,35 @@ router.post('/questions', verifyTokenAndCoordinator, async (req, res) => {
   }
 
   try {
-    // Create and save each question
-    const createdQuestions = await Question.insertMany(questions);
+    const preparedQuestions = [];
+    for (const question of questions) {
+      const programmeId = await resolveByIdOrName(Programme, question.programme);
+      const semesterId = await resolveByIdOrName(Semester, question.semester);
+      const sessionId = await resolveByIdOrName(Session, question.session);
+      const courseId = await resolveCourse(question.course, {
+        programme: programmeId,
+        semester: semesterId
+      });
+
+      if (!programmeId || !semesterId || !sessionId || !courseId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Programme, semester, session, and course are required for each question.'
+        });
+      }
+
+      preparedQuestions.push({
+        programme: programmeId,
+        semester: semesterId,
+        session: sessionId,
+        course: courseId,
+        text: question.text,
+        options: question.options,
+        createdBy: req.user.id
+      });
+    }
+
+    const createdQuestions = await Question.insertMany(preparedQuestions);
 
     res.status(200).json({
       success: true,
@@ -36,21 +91,27 @@ router.get('/questions', verifyTokenAndCoordinator, async (req, res) => {
             programme,
             semester,
             session,
+            course,
             page = 1,
             limit = 10
         } = req.query;
 
         // Build query based on filters
         const query = {};
-        if (programme) query.programme = programme;
-        if (semester) query.semester = semester;
-        if (session) query.session = session;
+        if (programme) query.programme = await resolveByIdOrName(Programme, programme);
+        if (semester) query.semester = await resolveByIdOrName(Semester, semester);
+        if (session) query.session = await resolveByIdOrName(Session, session);
+        if (course) query.course = await resolveCourse(course, {
+          programme: query.programme,
+          semester: query.semester
+        });
 
         // Execute query with pagination
         const questions = await Question.find(query)
             .skip((page - 1) * limit)
             .limit(parseInt(limit))
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .populate('course', 'name code');
 
         // Get total count for pagination
         const total = await Question.countDocuments(query);
@@ -80,7 +141,11 @@ router.get('/questions', verifyTokenAndCoordinator, async (req, res) => {
 router.get('/questions/:id', verifyToken, async (req, res) => {
     try {
         const question = await Question.findById(req.params.id)
-            .populate('createdBy', 'name email');
+            .populate('createdBy', 'name email')
+            .populate('course', 'name code')
+            .populate('programme', 'name')
+            .populate('semester', 'name')
+            .populate('session', 'name');
 
         if (!question) {
             return res.status(404).json({
@@ -106,15 +171,12 @@ router.get('/questions/:id', verifyToken, async (req, res) => {
 router.put('/questions/:id', verifyToken, async (req, res) => {
     try {
         const {
-            title,
-            description,
+            text,
             options,
-            difficulty,
-            category,
-            marks,
-            timeLimit,
-            tags,
-            status
+            programme,
+            semester,
+            session,
+            course
         } = req.body;
 
         const question = await Question.findById(req.params.id);
@@ -134,19 +196,22 @@ router.put('/questions/:id', verifyToken, async (req, res) => {
             });
         }
 
+        const updatePayload = {};
+        if (text) updatePayload.text = text;
+        if (options) updatePayload.options = options;
+        if (programme) updatePayload.programme = await resolveByIdOrName(Programme, programme);
+        if (semester) updatePayload.semester = await resolveByIdOrName(Semester, semester);
+        if (session) updatePayload.session = await resolveByIdOrName(Session, session);
+        if (course) {
+          updatePayload.course = await resolveCourse(course, {
+            programme: updatePayload.programme || question.programme,
+            semester: updatePayload.semester || question.semester
+          });
+        }
+
         const updatedQuestion = await Question.findByIdAndUpdate(
             req.params.id,
-            {
-                title,
-                description,
-                options,
-                difficulty,
-                category,
-                marks,
-                timeLimit,
-                tags,
-                status
-            },
+            updatePayload,
             { new: true, runValidators: true }
         );
 

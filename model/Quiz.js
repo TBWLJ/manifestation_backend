@@ -3,9 +3,11 @@ const mongoose = require('mongoose');
 
 const quizSchema = new mongoose.Schema({
   programme: { type: mongoose.Schema.Types.ObjectId, ref: 'Programme', required: true },
-  semester: { type: String, required: true }, // 'First', 'Second', etc.
+  semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true },
   session: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', required: true },
-  questions: [{ type: String }], // Store quiz questions as an array
-});
+  course: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true },
+  questions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Question' }],
+  totalQuestions: { type: Number, default: 0 },
+}, { timestamps: true });
 
 module.exports = mongoose.model('Quiz', quizSchema);

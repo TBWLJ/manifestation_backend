@@ -2,34 +2,89 @@ const express = require('express');
 const router = express.Router();
 const Exam = require('../model/Exam');
 const ExamResult = require("../model/ExamResult")
+const Programme = require('../model/Programme');
+const Semester = require('../model/Semester');
+const Session = require('../model/Session');
+const Course = require('../model/Course');
+const Question = require('../model/Question');
 const { verifyToken, verifyTokenAndCoordinator } = require('./middleware');
+const mongoose = require('mongoose');
+
+const isObjectId = (value) =>
+    mongoose.Types.ObjectId.isValid(value) &&
+    String(new mongoose.Types.ObjectId(value)) === String(value);
+
+const resolveByIdOrName = async (Model, value) => {
+    if (!value) return null;
+    if (isObjectId(value)) return value;
+    const doc = await Model.findOne({ name: value });
+    if (!doc) throw new Error(`${Model.modelName} not found for "${value}"`);
+    return doc._id;
+};
+
+const resolveCourse = async (value, extraQuery) => {
+    if (!value) return null;
+    if (isObjectId(value)) return value;
+    const doc = await Course.findOne({
+        ...extraQuery,
+        $or: [{ code: value }, { name: value }]
+    });
+    if (!doc) throw new Error(`Course not found for "${value}"`);
+    return doc._id;
+};
 
 // Create a new exam
 router.post('/exams', verifyTokenAndCoordinator, async (req, res) => {
     try {
-        const { title, duration, questionIds, passingScore, instructions } = req.body;
+        const { title, duration, questionIds, passingScore, instructions, programme, semester, session, course } = req.body;
 
-        // Validate minimum requirements
-        if (!questionIds || questionIds.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'At least one question is required'
-            });
+        const programmeId = await resolveByIdOrName(Programme, programme);
+        const semesterId = await resolveByIdOrName(Semester, semester);
+        const sessionId = await resolveByIdOrName(Session, session);
+        const courseId = await resolveCourse(course, {
+            programme: programmeId,
+            semester: semesterId
+        });
+
+        let finalQuestionIds = questionIds;
+        if (!finalQuestionIds || finalQuestionIds.length === 0) {
+            if (!courseId || !sessionId) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Provide questionIds or specify course and session to generate an exam.'
+                });
+            }
+            const query = { course: courseId, session: sessionId };
+            if (programmeId) query.programme = programmeId;
+            if (semesterId) query.semester = semesterId;
+
+            const foundQuestions = await Question.find(query).select('_id');
+            if (!foundQuestions.length) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'No questions found for selected course.'
+                });
+            }
+            finalQuestionIds = foundQuestions.map(q => q._id);
         }
 
         // Calculate default duration based on number of questions
         // Assuming average 2 minutes per question plus 15 minutes buffer
-        const calculatedDuration = (questionIds.length * 2 * 60) + (15 * 60);
+        const calculatedDuration = (finalQuestionIds.length * 2 * 60) + (15 * 60);
         
         const exam = new Exam({
             title,
             duration: duration || calculatedDuration, // Use provided duration or calculated one
-            questions: questionIds,
-            totalQuestions: questionIds.length,
+            questions: finalQuestionIds,
+            totalQuestions: finalQuestionIds.length,
             passingScore: passingScore || 60, // Default passing score of 60%
             instructions: instructions || 'Please answer all questions.',
             createdBy: req.user.id,
-            timePerQuestion: Math.floor((duration || calculatedDuration) / questionIds.length),
+            programme: programmeId,
+            semester: semesterId,
+            session: sessionId,
+            course: courseId,
+            timePerQuestion: Math.floor((duration || calculatedDuration) / finalQuestionIds.length),
             difficulty: 'medium', // You can calculate this based on questions' difficulty
             status: 'draft' // Add a status field to control exam visibility
         });
@@ -70,8 +125,7 @@ router.get('/exams/:id', verifyToken, async (req, res) => {
         // Don't send correct answers to students
         const sanitizedQuestions = exam.questions.map(q => ({
             _id: q._id,
-            title: q.title,
-            description: q.description,
+            text: q.text,
             options: q.options.map(opt => ({
                 text: opt.text,
                 _id: opt._id
@@ -131,7 +185,12 @@ router.post('/exams/:id/submit', verifyToken, async (req, res) => {
             const question = exam.questions.find(q => q._id.toString() === answer.questionId);
             if (!question) return null;
 
-            const isCorrect = question.correctOption.toString() === answer.selectedOption;
+            const selectedOption = answer.selectedOption;
+            const optionById = question.options.id(selectedOption);
+            const optionByText = question.options.find(opt => opt.text === selectedOption);
+            const optionByIndex = Number.isInteger(selectedOption) ? question.options[selectedOption] : null;
+            const chosenOption = optionById || optionByText || optionByIndex;
+            const isCorrect = !!(chosenOption && chosenOption.isCorrect);
             const points = question.points || 1;
             totalPossibleScore += points;
             
@@ -148,7 +207,7 @@ router.post('/exams/:id/submit', verifyToken, async (req, res) => {
         });
 
         // Calculate percentage score
-        const percentageScore = (totalScore / totalPossibleScore) * 100;
+        const percentageScore = totalPossibleScore ? (totalScore / totalPossibleScore) * 100 : 0;
 
         // Save exam result
         const examResult = new ExamResult({

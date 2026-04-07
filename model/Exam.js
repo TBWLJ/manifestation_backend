@@ -6,6 +6,22 @@ const ExamSchema = new mongoose.Schema({
         required: true,
         trim: true
     },
+    programme: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Programme'
+    },
+    semester: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Semester'
+    },
+    session: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Session'
+    },
+    course: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Course'
+    },
     duration: {
         type: Number,
         required: true,
